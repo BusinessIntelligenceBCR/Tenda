@@ -1,5 +1,5 @@
 # ==============================================================================
-# SCRIPT 4: DASHBOARD OMNICHANNEL INTERATIVO COM UPLOAD DE ARQUIVO
+# SCRIPT 4: DASHBOARD OMNICHANNEL INTERATIVO COM TELA DE LOGIN E UPLOAD SENSÍVEL
 # ==============================================================================
 import os
 import pandas as pd
@@ -9,6 +9,44 @@ import streamlit as st
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Governança Omnichannel - Tenda", layout="wide")
+
+# --- FUNÇÃO NATIVA DE AUTENTICAÇÃO ---
+def verificar_autenticacao():
+    # Inicializa a variável na memória se for o primeiro acesso
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    # Se o usuário não estiver autenticado, exibe a tela de login e bloqueia o app
+    if not st.session_state["autenticado"]:
+        st.title("🔑 Controle de Acesso - BCR CX")
+        st.markdown("Insira suas credenciais para acessar o ambiente de Governança Tenda.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            usuario_digitado = st.text_input("Usuário do Sistema:")
+            senha_digitada = st.text_input("Senha de Acesso:", type="password")
+            botao_login = st.button("Acessar Painel")
+            
+        if botao_login:
+            # Compara com as credenciais salvas nos Secrets da Nuvem do Streamlit
+            if (usuario_digitado == st.secrets["acesso"]["usuario"] and 
+                senha_digitada == st.secrets["acesso"]["senha"]):
+                st.session_state["autenticado"] = True
+                st.success("Acesso autorizado! Carregando dados...")
+                st.rerun() # Recarrega a página já autenticado
+            else:
+                st.error("Usuário ou senha incorretos. Tente novamente.")
+        
+        return False # Interrompe a execução do restante do script
+    return True # Libera a execução do painel
+
+# Executa a trava de segurança. Se retornar Falso, o script para aqui.
+if not verificar_autenticacao():
+    st.stop()
+
+# ==============================================================================
+# SEÇÃO PRINCIPAL DO DASHBOARD (SÓ EXECUTA SE ARRIVAR COMO AUTENTICADO)
+# ==============================================================================
 st.title("📊 Painel Interativo de Fluxo e Atrito de Atendimento")
 st.markdown("---")
 
@@ -41,17 +79,16 @@ st.sidebar.header("📂 Inserção de Dados")
 arquivo_upado = st.sidebar.file_uploader(
     "Arraste a base Parquet da Zendesk aqui:", 
     type=["parquet"],
-    help="O painel só será carregado após a inserção do arquivo 'raw_zendesk_tickets.parquet'."
+    help="O painel só será carregado após a inserção do arquivo 'safe_zendesk_tickets.parquet'."
 )
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Ajuste de Visualização")
 vol_minimo = st.sidebar.slider("Ocultar fluxos com menos de X clientes:", 1, 50, 2)
 
-# --- CARGA DOS DADOS (AGORA DEPENDE DO UPLOAD) ---
+# --- CARGA DOS DADOS (DEPENDE DO UPLOAD) ---
 @st.cache_data
 def carregar_e_processar_dados(arquivo):
-    # O Pandas consegue ler o arquivo upado pelo Streamlit diretamente da memória
     df = pd.read_parquet(arquivo)
     df['Canal de Entrada'] = df['Canal de Entrada'].apply(limpar_canal)
     df['Motivo de Contato'] = df['Motivo de Contato'].apply(super_limpeza_motivo)
@@ -66,12 +103,12 @@ def carregar_e_processar_dados(arquivo):
     df['Motivo_Inicial_Jornada'] = df['CPF_Limpo'].map(mapa_motivo_inicial)
     return df
 
-# Se nenhum arquivo foi upado, mostra a tela de espera e interrompe o script
+# Se nenhum arquivo foi upado, exibe tela de instrução e encerra
 if arquivo_upado is None:
-    st.info("👋 Olá! Para iniciar a análise, arraste e solte o arquivo **raw_zendesk_tickets.parquet** na área indicada na barra lateral esquerda.")
+    st.info("👋 Olá! Para iniciar a análise, realize o login e arraste o arquivo **safe_zendesk_tickets.parquet** na área indicada na barra lateral esquerda.")
     st.stop()
 
-# Se o código passou do st.stop(), significa que o gestor upou o arquivo!
+# Carrega a base upada da memória
 df = carregar_e_processar_dados(arquivo_upado)
 
 # ==============================================================================
@@ -227,5 +264,5 @@ with st.expander("📖 Como interpretar as proporções desta análise?"):
     
     * **Quantidade de Clientes:** Volume de CPFs únicos que entraram no SAC por este motivo e acabaram fazendo exatamente o caminho selecionado.
     * **% Dentro desta Jornada:** O quanto este motivo domina o caminho filtrado. Exemplo: se estiver em 50%, significa que metade de todas as pessoas que sofreram esse transbordo queriam falar sobre este assunto específico.
-    * **% do Total da Operação (CPFs):** Perspectiva de volume macro. Mostra qual é a relevância dessas pessoas frente a toda a base de clientes atendidos pela Tenda no período.
+    * **% do Total da Operação (CPFs):** Perspectiva de volume macro. Shows qual é a relevância dessas pessoas frente a toda a base de clientes atendidos pela Tenda no período.
     """)
