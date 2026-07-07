@@ -417,3 +417,103 @@ if not df_fluxo.empty:
         st.warning("Com o volume mínimo configurado na barra lateral, não há dados suficientes para exibir o fluxo.")
 else:
     st.info("Não há transbordos registados para o filtro selecionado.")
+
+# ==============================================================================
+# SEÇÃO 6: EVOLUÇÃO HISTÓRICA MÊS A MÊS (ANÁLISE DE CULTURA DIGITAL)
+# ==============================================================================
+st.header("6️⃣ Evolução Mensal do Comportamento (MoM)")
+st.markdown("Monitore a tendência histórica das rotas de transbordo para medir a mudança cultural do cliente e a adoção dos canais digitais.")
+
+# --- EXTRAÇÃO E MAPEAMENTO CRONOLÓGICO ---
+meses_pt = {2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun'}
+df['Num_Mes'] = df['Data_Ordenacao'].dt.month
+df['Mês'] = df['Num_Mes'].map(meses_pt)
+
+# Filtra estritamente a janela do projeto (Fevereiro a Junho)
+df_cronologico_base = df[df['Num_Mes'].isin([2, 3, 4, 5, 6])]
+
+transicoes_mensais = []
+# Agrupamos por CPF e por Mês para avaliar o comportamento isolado dentro de cada ciclo
+jornadas_por_mes = df_cronologico_base.groupby(['CPF_Limpo', 'Mês', 'Num_Mes'])['Canal de Entrada'].apply(list)
+
+for (cpf, mes, num_mes), jornada in jornadas_por_mes.items():
+    j_limpa = []
+    for c in jornada:
+        if not j_limpa or c != j_limpa[-1]:
+            j_limpa.append(c)
+    if len(j_limpa) > 1:
+        for i in range(len(j_limpa) - 1):
+            transicoes_mensais.append({
+                'Mês': mes,
+                'Num_Mes': num_mes,
+                'Rota': f"{j_limpa[i]} ➔ {j_limpa[i+1]}"
+            })
+
+if transicoes_mensais:
+    df_cronologico = pd.DataFrame(transicoes_mensais)
+    
+    # Agrupa e calcula a volumetria absoluta por mês cronológico
+    df_tendencia = df_cronologico.groupby(['Num_Mes', 'Mês', 'Rota']).size().reset_index(name='Volume de Clientes')
+    df_tendencia = df_tendencia.sort_values(by='Num_Mes')
+    
+    # Identifica as rotas mais críticas do histórico para evitar sobrecarga no gráfico
+    top_rotas_gerais = df_cronologico['Rota'].value_counts().head(5).index.tolist()
+    
+    # Busca automática da rota específica de interesse para pré-seleção inteligente
+    rotas_existentes = df_cronologico['Rota'].unique()
+    rota_alvo_sugerida = [r for r in rotas_existentes if "WHATSAPP" in r.upper() and "VOZ" in r.upper()]
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Controles de Perspectiva Visual
+    opcao_visao_tempo = st.radio(
+        "Selecione a perspectiva de análise temporal:",
+        ["Top 5 Rotas de Maior Atrito Geral", "Isolar e Monitorar uma Rota Específica (Mudança Cultural)"],
+        horizontal=True,
+        help="Alterne entre uma visão macro dos maiores problemas ou uma visão micro de uma esteira específica."
+    )
+    
+    if opcao_visao_tempo == "Top 5 Rotas de Maior Atrito Geral":
+        df_grafico_tempo = df_tendencia[df_tendencia['Rota'].isin(top_rotas_gerais)]
+        titulo_tempo = "Tendência Mensal das 5 Maiores Rotas de Transbordo (Volume Absoluto)"
+    else:
+        todas_rotas_disponiveis = sorted(df_cronologico['Rota'].unique())
+        indice_padrao = todas_rotas_disponiveis.index(rota_alvo_sugerida[0]) if rota_alvo_sugerida else 0
+        
+        rota_selecionada_tempo = st.selectbox(
+            "Escolha a rota de transbordo para auditoria de cultura:", 
+            todas_rotas_disponiveis, 
+            index=indice_padrao
+        )
+        df_grafico_tempo = df_tendencia[df_tendencia['Rota'] == rota_selecionada_tempo]
+        titulo_tempo = f"Evolução Temporal do Comportamento Evasivo: {rota_selecionada_tempo}"
+        
+    # --- GRÁFICO DE LINHA INTERATIVO (MoM) ---
+    fig_linha = px.line(
+        df_grafico_tempo, 
+        x='Mês', 
+        y='Volume de Clientes', 
+        color='Rota',
+        markers=True,
+        title=titulo_tempo,
+        color_discrete_sequence=px.colors.qualitative.Safe
+    )
+    
+    fig_linha.update_layout(
+        xaxis_title="Evolução Mensal", 
+        yaxis_title="Volume de Clientes (CPFs)", 
+        height=450,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0)
+    )
+    fig_linha.update_traces(line=dict(width=3), marker=dict(size=8))
+    st.plotly_chart(fig_linha, use_container_width=True)
+    
+    # --- MATRIZ COMPLEMENTAR NUMÉRICA ---
+    with st.expander("📊 Visualizar Matriz de Dados Numéricos Proporcionais (MoM)"):
+        df_pivot_tempo = df_tendencia.pivot(index='Rota', columns='Mês', values='Volume de Clientes').fillna(0).astype(int)
+        # Ordena as colunas respeitando estritamente a sequência cronológica dos meses
+        colunas_ordenadas = [m for m in meses_pt.values() if m in df_pivot_tempo.columns]
+        df_pivot_tempo = df_pivot_tempo[colunas_ordenadas]
+        st.dataframe(df_pivot_tempo, use_container_width=True)
+else:
+    st.info("Não há dados de transbordo suficientes nos registros históricos para compor a análise temporal.")
