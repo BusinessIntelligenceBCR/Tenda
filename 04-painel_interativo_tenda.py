@@ -4,6 +4,7 @@
 import os
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import re
 import streamlit as st
 
@@ -17,22 +18,22 @@ def verificar_autenticacao():
 
     if not st.session_state["autenticado"]:
         st.title("🔑 Controle de Acesso - BCR CX")
-        st.markdown("Insira suas credenciais para acessar o ambiente de Governança Tenda.")
+        st.markdown("Insira as suas credenciais para aceder ao ambiente de Governança Tenda.")
         
         col1, col2 = st.columns(2)
         with col1:
-            usuario_digitado = st.text_input("Usuário do Sistema:")
+            usuario_digitado = st.text_input("Utilizador do Sistema:")
             senha_digitada = st.text_input("Senha de Acesso:", type="password")
-            botao_login = st.button("Acessar Painel")
+            botao_login = st.button("Aceder ao Painel")
             
         if botao_login:
             if (usuario_digitado == st.secrets["acesso"]["usuario"] and 
                 senha_digitada == st.secrets["acesso"]["senha"]):
                 st.session_state["autenticado"] = True
-                st.success("Acesso autorizado! Carregando dados...")
+                st.success("Acesso autorizado! A carregar dados...")
                 st.rerun() 
             else:
-                st.error("Usuário ou senha incorretos. Tente novamente.")
+                st.error("Utilizador ou senha incorretos. Tente novamente.")
         
         return False 
     return True 
@@ -78,17 +79,6 @@ arquivo_upado = st.sidebar.file_uploader(
     help="O painel só será carregado após a inserção do arquivo 'safe_zendesk_tickets.parquet'."
 )
 
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Filtro de Relevância")
-# CORREÇÃO AQUI: Mudamos de slider para number_input, permitindo filtrar até milhares de clientes se necessário.
-vol_minimo = st.sidebar.number_input(
-    "Ocultar volumes com menos de X clientes:", 
-    min_value=1, 
-    value=5, 
-    step=5,
-    help="Remove os 'ruídos' (exceções e erros operacionais) para focar nas jornadas e motivos que afetam o grande volume."
-)
-
 # --- CARGA DOS DADOS ---
 @st.cache_data
 def carregar_e_processar_dados(arquivo):
@@ -112,10 +102,46 @@ if arquivo_upado is None:
 
 df = carregar_e_processar_dados(arquivo_upado)
 
+# --- MAPEAR MESES GLOBAIS ---
+dic_meses = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun', 
+             7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+df['Num_Mes'] = df['Data_Ordenacao'].dt.month
+df['Mês_Abrev'] = df['Num_Mes'].map(dic_meses)
+
+# --- BARRA LATERAL: FILTROS GLOBAIS ---
+st.sidebar.markdown("---")
+st.sidebar.header("📅 Filtro Temporal (Visão Atual)")
+meses_disponiveis = df[['Num_Mes', 'Mês_Abrev']].drop_duplicates().sort_values('Num_Mes')['Mês_Abrev'].tolist()
+mes_filtro = st.sidebar.selectbox(
+    "Analisar Mês Específico:", 
+    ["Todos os Meses"] + meses_disponiveis,
+    help="Este filtro atualiza as Seções 1 a 5. A Seção 6 sempre exibirá o histórico completo para comparação de cultura."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Filtro de Relevância")
+vol_minimo = st.sidebar.number_input(
+    "Ocultar volumes com menos de X clientes:", 
+    min_value=1, 
+    value=5, 
+    step=5,
+    help="Remove os 'ruídos' operacionais para focar nas jornadas que afetam o grande volume."
+)
+
+# --- APLICAÇÃO DO FILTRO TEMPORAL NO DATAFRAME ATIVO ---
+if mes_filtro == "Todos os Meses":
+    df_ativo = df.copy()
+else:
+    df_ativo = df[df['Mês_Abrev'] == mes_filtro].copy()
+
+if df_ativo.empty:
+    st.warning("Não há tickets registados para o mês selecionado.")
+    st.stop()
+
 # ==============================================================================
-# ENGENHARIA DE MÉTRICAS E JORNADAS COMPLETAS
+# ENGENHARIA DE MÉTRICAS E JORNADAS COMPLETAS (BASEADO NO DF_ATIVO)
 # ==============================================================================
-df_cpfs = df.groupby('CPF_Limpo').agg({'Motivo_Inicial_Jornada': 'first', 'Ticket ID': 'count'}).reset_index()
+df_cpfs = df_ativo.groupby('CPF_Limpo').agg({'Motivo_Inicial_Jornada': 'first', 'Ticket ID': 'count'}).reset_index()
 df_cpfs['Teve_Recontato'] = (df_cpfs['Ticket ID'] > 1).astype(int)
 
 total_recontatos_global = df_cpfs['Teve_Recontato'].sum()
@@ -127,9 +153,8 @@ df_taxa_motivo = df_cpfs.groupby('Motivo_Inicial_Jornada').agg(
 
 df_taxa_motivo['% do Total de Clientes'] = (df_taxa_motivo['Volume_Clientes'] / total_clientes_global * 100).round(2)
 df_taxa_motivo['Taxa de Recontato (%)'] = (df_taxa_motivo['Total_Recontatos'] / df_taxa_motivo['Volume_Clientes'] * 100).round(2)
-df_taxa_motivo['Impacto no Retrabalho (%)'] = (df_taxa_motivo['Total_Recontatos'] / total_recontatos_global * 100).round(2)
+df_taxa_motivo['Impacto no Retrabalho (%)'] = (df_taxa_motivo['Total_Recontatos'] / total_recontatos_global * 100).round(2) if total_recontatos_global > 0 else 0
 
-# CORREÇÃO AQUI: A tabela agora respeita o vol_minimo inserido na barra lateral!
 df_taxa_motivo = df_taxa_motivo[df_taxa_motivo['Volume_Clientes'] >= vol_minimo].sort_values(by='Impacto no Retrabalho (%)', ascending=False)
 motivos_ordenados_por_impacto = df_taxa_motivo['Motivo_Inicial_Jornada'].tolist()
 
@@ -140,12 +165,11 @@ def construir_string_jornada(canais):
             caminho_limpo.append(c)
     return " ➔ ".join(caminho_limpo)
 
-df_jornadas_completas = df.groupby('CPF_Limpo').agg({
+df_jornadas_completas = df_ativo.groupby('CPF_Limpo').agg({
     'Canal de Entrada': construir_string_jornada,
     'Motivo_Inicial_Jornada': 'first'
 }).reset_index().rename(columns={'Canal de Entrada': 'Jornada_Realizada'})
 
-# --- FUNÇÃO GERADORA DO GRÁFICO ---
 def desenhar_grafico_jornadas(df_input, titulo_grafico, min_vol, cor_barra="#2E86C1"):
     jornadas = df_input.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
     caminhos = []
@@ -159,7 +183,6 @@ def desenhar_grafico_jornadas(df_input, titulo_grafico, min_vol, cor_barra="#2E8
     df_caminhos = pd.DataFrame({'Jornada (Início ➔ Meio ➔ Fim)': caminhos})
     df_ranking = df_caminhos.groupby('Jornada (Início ➔ Meio ➔ Fim)').size().reset_index(name='Quantidade de Clientes')
     
-    # CORREÇÃO AQUI: Aplica o volume mínimo de fato nos fluxos
     df_ranking = df_ranking[df_ranking['Quantidade de Clientes'] >= min_vol]
     
     if df_ranking.empty:
@@ -176,14 +199,14 @@ def desenhar_grafico_jornadas(df_input, titulo_grafico, min_vol, cor_barra="#2E8
 # ==============================================================================
 # SEÇÃO 1: ANÁLISE COMPLETA POR CANAL INICIAL
 # ==============================================================================
-st.header("1️⃣ Tendência de Fluxo por Canal Inicial")
+st.header(f"1️⃣ Tendência de Fluxo por Canal Inicial ({mes_filtro})")
 st.markdown("Selecione o canal de origem para analisar a esteira de transbordo utilizada pelos clientes.")
 
-canais_contagem = df.groupby('Canal_Inicial_Jornada')['CPF_Limpo'].nunique().sort_values(ascending=False)
+canais_contagem = df_ativo.groupby('Canal_Inicial_Jornada')['CPF_Limpo'].nunique().sort_values(ascending=False)
 lista_canais = ["Todos (Visão Geral)"] + canais_contagem.index.tolist()
 canal_selecionado = st.selectbox("📌 Filtrar Canal de Origem:", lista_canais, key="sec1")
 
-df_sec1 = df[df['Canal_Inicial_Jornada'] == canal_selecionado] if canal_selecionado != "Todos (Visão Geral)" else df.copy()
+df_sec1 = df_ativo[df_ativo['Canal_Inicial_Jornada'] == canal_selecionado] if canal_selecionado != "Todos (Visão Geral)" else df_ativo.copy()
 grafico1, tb1 = desenhar_grafico_jornadas(df_sec1, f"Top Caminhos Percorridos - Iniciados em: {canal_selecionado}", vol_minimo, "#1F618D")
 
 if grafico1:
@@ -196,7 +219,7 @@ st.markdown("---")
 # ==============================================================================
 # SEÇÃO 2: MATRIZ DE ATRITO PROPORCIONAL
 # ==============================================================================
-st.header("2️⃣ Diagnóstico de Atrito: Esforço Operacional Real")
+st.header(f"2️⃣ Diagnóstico de Atrito: Esforço Operacional ({mes_filtro})")
 st.markdown("Tabela ordenada pelo **Impacto no Retrabalho (%)**, evidenciando os maiores gargalos.")
 
 df_top_exibicao = df_taxa_motivo.head(20).rename(columns={
@@ -210,12 +233,11 @@ st.dataframe(df_top_exibicao, use_container_width=True, hide_index=True)
 
 with st.expander("📖 Como ler e interpretar esta tabela?"):
     st.markdown("""
-    Esta tabela identifica a verdadeira dor da operação. A contagem **não é feita por número de tickets**, mas sim por **CPFs únicos**, evitando que um único cliente muito frustrado distorça os dados.
+    Esta tabela identifica a verdadeira dor da operação. A contagem **não é feita por número de tickets**, mas sim por **CPFs únicos**.
     
-    * **Total de Clientes:** A quantidade exata de CPFs únicos que iniciaram a sua jornada com este assunto. É o volume bruto do tema.
-    * **Qtd. Retornos:** Quantos clientes da coluna anterior falharam em ter o problema resolvido de primeira e abriram 2 ou mais chamados.
-    * **Taxa Interna (%):** A eficiência do assunto. Responde: *"Independente do volume, qual é a chance de um cliente que liga sobre este tema precisar voltar?"* (Qtd. Retornos / Total de Clientes).
-    * **Impacto Global (%):** A principal métrica estratégica. Responde: *"De todo o retrabalho gerado no SAC, quantos % são culpa deste motivo isolado?"*. Resolver um motivo com alto impacto global traz o maior alívio imediato para a fila de atendimento.
+    * **Total de Clientes:** A quantidade exata de CPFs únicos que iniciaram a sua jornada com este assunto.
+    * **Qtd. Retornos:** Quantos clientes falharam em ter o problema resolvido de primeira e abriram 2 ou mais chamados.
+    * **Taxa Interna (%):** A eficiência do assunto. Responde: *"Qual é a chance de um cliente que liga sobre este tema precisar voltar?"* * **Impacto Global (%):** Responde: *"De todo o retrabalho gerado, quantos % são culpa deste motivo isolado?"*. 
     """)
 
 st.markdown("---")
@@ -223,13 +245,13 @@ st.markdown("---")
 # ==============================================================================
 # SEÇÃO 3: ANÁLISE SETORIAL POR MOTIVO DE CONTATO
 # ==============================================================================
-st.header("3️⃣ Análise de Transbordo por Motivo de Contato")
+st.header(f"3️⃣ Análise de Transbordo por Motivo de Contato ({mes_filtro})")
 st.markdown("Descubra as jornadas geradas por um motivo específico.")
 
 lista_filtro_motivos = ["Todos (Visão Geral)"] + motivos_ordenados_por_impacto
 motivo_selecionado = st.selectbox("📌 Filtrar por Motivo Específico:", lista_filtro_motivos, key="sec3")
 
-df_sec3 = df[df['Motivo_Inicial_Jornada'] == motivo_selecionado] if motivo_selecionado != "Todos (Visão Geral)" else df.copy()
+df_sec3 = df_ativo[df_ativo['Motivo_Inicial_Jornada'] == motivo_selecionado] if motivo_selecionado != "Todos (Visão Geral)" else df_ativo.copy()
 grafico3, tb3 = desenhar_grafico_jornadas(df_sec3, f"Top Caminhos Percorridos do Motivo: {motivo_selecionado}", vol_minimo, "#884EA0")
 
 if grafico3:
@@ -242,10 +264,9 @@ st.markdown("---")
 # ==============================================================================
 # SEÇÃO 4: ANÁLISE INVERSA - MOTIVOS POR JORNADA
 # ==============================================================================
-st.header("4️⃣ Análise Inversa: Motivos por Fluxo de Jornada")
+st.header(f"4️⃣ Análise Inversa: Motivos por Fluxo de Jornada ({mes_filtro})")
 st.markdown("Selecione um caminho exato para descobrir quais assuntos empurraram o cliente para essa esteira.")
 
-# CORREÇÃO AQUI: A lista suspensa só exibe jornadas que respeitam o volume mínimo
 jornadas_filtradas = df_jornadas_completas['Jornada_Realizada'].value_counts()
 jornadas_validas = jornadas_filtradas[jornadas_filtradas >= vol_minimo].index.tolist()
 
@@ -258,8 +279,6 @@ else:
     total_clientes_jornada = len(df_sec4)
 
     df_ranking_jornada = df_sec4.groupby('Motivo_Inicial_Jornada').size().reset_index(name='Quantidade de Clientes')
-    
-    # CORREÇÃO AQUI: Aplica o volume mínimo nos motivos dentro desta jornada também
     df_ranking_jornada = df_ranking_jornada[df_ranking_jornada['Quantidade de Clientes'] >= vol_minimo]
     df_ranking_jornada = df_ranking_jornada.sort_values(by='Quantidade de Clientes', ascending=False)
 
@@ -274,34 +293,23 @@ else:
         st.markdown(f"**Volume de clientes (CPFs) que realizaram a jornada `{jornada_selecionada}`:** {total_clientes_jornada}")
         st.dataframe(df_ranking_jornada.head(20), use_container_width=True, hide_index=True)
 
-with st.expander("📖 Como interpretar as proporções desta análise?"):
-    st.markdown("""
-    Enquanto a Seção 3 avalia o caminho gerado por um motivo, esta seção faz o caminho inverso: ela pega um funil que deu errado (como *WhatsApp ➔ Voz*) e investiga quais assuntos causaram essa quebra.
-    
-    * **Quantidade de Clientes:** Volume de CPFs únicos que entraram no SAC por este motivo e acabaram fazendo exatamente o caminho selecionado.
-    * **% Dentro desta Jornada:** O quanto este motivo domina o caminho filtrado. Exemplo: se estiver em 50%, significa que metade de todas as pessoas que sofreram esse transbordo queriam falar sobre este assunto específico.
-    * **% do Total da Operação (CPFs):** Perspectiva de volume macro. Shows qual é a relevância dessas pessoas frente a toda a base de clientes atendidos pela Tenda no período.
-    """)
-
+st.markdown("---")
 
 # ==============================================================================
 # SEÇÃO 5: VISÃO EXECUTIVA - FLUXO OMNICHANNEL E KPIS
 # ==============================================================================
-import plotly.graph_objects as go 
-
-st.header("5️⃣ Mapa de Jornada e KPIs de Retenção")
-st.markdown("Visão executiva do comportamento de transbordo entre os canais de atendimento.")
+st.header(f"5️⃣ Mapa de Jornada e KPIs de Retenção ({mes_filtro})")
+st.markdown("Visão executiva do comportamento de transbordo entre os canais de atendimento no período selecionado.")
 
 # --- CÁLCULO DE KPIS GLOBAIS ---
-media_canais_cpf = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
+media_canais_cpf = df_ativo.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
 
-cpfs_multicanal_count = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique()
+cpfs_multicanal_count = df_ativo.groupby('CPF_Limpo')['Canal de Entrada'].nunique()
 volume_clientes_transbordo = cpfs_multicanal_count[cpfs_multicanal_count > 1].count()
 taxa_transbordo = (volume_clientes_transbordo / total_clientes_global) * 100 if total_clientes_global > 0 else 0
 
-# Calcula a pior rota de transbordo (A ➔ B) e o seu impacto no problema geral
 pares_transbordo = []
-for jornada in df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
+for jornada in df_ativo.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
     j_limpa = []
     for c in jornada:
         if not j_limpa or c != j_limpa[-1]:
@@ -316,7 +324,6 @@ if pares_transbordo:
     pior_rota_nome = df_pares.mode()[0]
     volume_pior_rota = df_pares.value_counts().iloc[0]
     
-    # Impacto % da Pior Rota sobre todos os clientes multicanal
     percentual_pior_rota = (volume_pior_rota / volume_clientes_transbordo) * 100 if volume_clientes_transbordo > 0 else 0
     pior_rota = f"{pior_rota_nome} ({percentual_pior_rota:.1f}%)"
 
@@ -336,11 +343,11 @@ with col_filt1:
         ["Apenas Principais (Voz, Whatsapp, E-mail)", "Ver Todos os Canais"]
     )
 with col_filt2:
-    lista_motivos = ["Todos (Geral)"] + df['Motivo_Inicial_Jornada'].dropna().unique().tolist()
+    lista_motivos = ["Todos (Geral)"] + df_ativo['Motivo_Inicial_Jornada'].dropna().unique().tolist()
     filtro_motivo_fluxo = st.selectbox("Filtrar por Motivo:", lista_motivos)
 
 # --- PREPARAÇÃO DOS DADOS (SANKEY) ---
-df_sec5 = df.copy()
+df_sec5 = df_ativo.copy()
 if filtro_motivo_fluxo != "Todos (Geral)":
     df_sec5 = df_sec5[df_sec5['Motivo_Inicial_Jornada'] == filtro_motivo_fluxo]
 
@@ -423,23 +430,19 @@ if not df_fluxo.empty:
 else:
     st.info("Não há transbordos registados para o filtro selecionado.")
 
+st.markdown("---")
+
 # ==============================================================================
 # SEÇÃO 6: EVOLUÇÃO HISTÓRICA MÊS A MÊS (ANÁLISE DE CULTURA DIGITAL)
 # ==============================================================================
-st.header("6️⃣ Evolução Mensal do Comportamento (MoM)")
-st.markdown("Monitore a tendência histórica das rotas de transbordo para medir a mudança cultural do cliente e a adoção dos canais digitais.")
-
-# --- EXTRAÇÃO E MAPEAMENTO CRONOLÓGICO ---
-meses_pt = {2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun'}
-df['Num_Mes'] = df['Data_Ordenacao'].dt.month
-df['Mês'] = df['Num_Mes'].map(meses_pt)
-
-# Filtra estritamente a janela do projeto (Fevereiro a Junho)
-df_cronologico_base = df[df['Num_Mes'].isin([2, 3, 4, 5, 6])]
+# NOTA IMPORTANTE: A Seção 6 utiliza o DataFrame global 'df' (sem o filtro da barra lateral),
+# para garantir que o utilizador consiga ver sempre a evolução completa dos meses independentemente 
+# do mês específico selecionado para inspecionar nas seções acima.
+st.header("6️⃣ Evolução Mensal do Comportamento (Histórico Completo)")
+st.markdown("Monitore a tendência histórica das rotas de transbordo para medir a mudança cultural do cliente ao longo de todos os meses analisados.")
 
 transicoes_mensais = []
-# Agrupamos por CPF e por Mês para avaliar o comportamento isolado dentro de cada ciclo
-jornadas_por_mes = df_cronologico_base.groupby(['CPF_Limpo', 'Mês', 'Num_Mes'])['Canal de Entrada'].apply(list)
+jornadas_por_mes = df.groupby(['CPF_Limpo', 'Mês_Abrev', 'Num_Mes'])['Canal de Entrada'].apply(list)
 
 for (cpf, mes, num_mes), jornada in jornadas_por_mes.items():
     j_limpa = []
@@ -457,25 +460,19 @@ for (cpf, mes, num_mes), jornada in jornadas_por_mes.items():
 if transicoes_mensais:
     df_cronologico = pd.DataFrame(transicoes_mensais)
     
-    # Agrupa e calcula a volumetria absoluta por mês cronológico
     df_tendencia = df_cronologico.groupby(['Num_Mes', 'Mês', 'Rota']).size().reset_index(name='Volume de Clientes')
     df_tendencia = df_tendencia.sort_values(by='Num_Mes')
     
-    # Identifica as rotas mais críticas do histórico para evitar sobrecarga no gráfico
     top_rotas_gerais = df_cronologico['Rota'].value_counts().head(5).index.tolist()
-    
-    # Busca automática da rota específica de interesse para pré-seleção inteligente
     rotas_existentes = df_cronologico['Rota'].unique()
     rota_alvo_sugerida = [r for r in rotas_existentes if "WHATSAPP" in r.upper() and "VOZ" in r.upper()]
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Controles de Perspectiva Visual
     opcao_visao_tempo = st.radio(
         "Selecione a perspectiva de análise temporal:",
         ["Top 5 Rotas de Maior Atrito Geral", "Isolar e Monitorar uma Rota Específica (Mudança Cultural)"],
-        horizontal=True,
-        help="Alterne entre uma visão macro dos maiores problemas ou uma visão micro de uma esteira específica."
+        horizontal=True
     )
     
     if opcao_visao_tempo == "Top 5 Rotas de Maior Atrito Geral":
@@ -493,7 +490,6 @@ if transicoes_mensais:
         df_grafico_tempo = df_tendencia[df_tendencia['Rota'] == rota_selecionada_tempo]
         titulo_tempo = f"Evolução Temporal do Comportamento Evasivo: {rota_selecionada_tempo}"
         
-    # --- GRÁFICO DE LINHA INTERATIVO (MoM) ---
     fig_linha = px.line(
         df_grafico_tempo, 
         x='Mês', 
@@ -513,12 +509,10 @@ if transicoes_mensais:
     fig_linha.update_traces(line=dict(width=3), marker=dict(size=8))
     st.plotly_chart(fig_linha, use_container_width=True)
     
-    # --- MATRIZ COMPLEMENTAR NUMÉRICA ---
     with st.expander("📊 Visualizar Matriz de Dados Numéricos Proporcionais (MoM)"):
         df_pivot_tempo = df_tendencia.pivot(index='Rota', columns='Mês', values='Volume de Clientes').fillna(0).astype(int)
-        # Ordena as colunas respeitando estritamente a sequência cronológica dos meses
-        colunas_ordenadas = [m for m in meses_pt.values() if m in df_pivot_tempo.columns]
+        colunas_ordenadas = [m for m in dic_meses.values() if m in df_pivot_tempo.columns]
         df_pivot_tempo = df_pivot_tempo[colunas_ordenadas]
         st.dataframe(df_pivot_tempo, use_container_width=True)
 else:
-    st.info("Não há dados de transbordo suficientes nos registros históricos para compor a análise temporal.")
+    st.info("Não há dados de transbordo suficientes nos registos históricos para compor a análise temporal.")
