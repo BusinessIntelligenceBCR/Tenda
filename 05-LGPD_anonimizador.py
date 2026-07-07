@@ -5,8 +5,8 @@ import pandas as pd
 import hashlib
 import os
 
-ARQUIVO_ORIGINAL = "raw_zendesk_tickets.parquet"
-ARQUIVO_SEGURO = "safe_zendesk_tickets.parquet"
+ARQUIVO_ORIGINAL = "base_geral_zendesk_2026-07-01_a_2026-07-06.parquet"
+ARQUIVO_SEGURO = "base_safe_zendesk_2026-07-01_a_2026-07-06.parquet"
 
 print("🔒 Iniciando processo de anonimização de CPFs (LGPD)...")
 
