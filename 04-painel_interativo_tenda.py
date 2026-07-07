@@ -282,3 +282,77 @@ with st.expander("📖 Como interpretar as proporções desta análise?"):
     * **% Dentro desta Jornada:** O quanto este motivo domina o caminho filtrado. Exemplo: se estiver em 50%, significa que metade de todas as pessoas que sofreram esse transbordo queriam falar sobre este assunto específico.
     * **% do Total da Operação (CPFs):** Perspectiva de volume macro. Shows qual é a relevância dessas pessoas frente a toda a base de clientes atendidos pela Tenda no período.
     """)
+
+
+    # ==============================================================================
+# SEÇÃO 5: VISÃO EXECUTIVA - FLUXO OMNICHANNEL E KPIS
+# ==============================================================================
+st.header("5️⃣ Mapa de Jornada e KPIs de Retenção")
+st.markdown("Visão executiva do comportamento de transbordo e eficiência do primeiro atendimento (FCR).")
+
+# --- CÁLCULO DE KPIS ---
+# 1. Resolução em 1º Contato (FCR - First Contact Resolution)
+cpfs_resolvidos_primeira = df_cpfs[df_cpfs['Ticket ID'] == 1]['CPF_Limpo'].nunique()
+fcr_percentual = (cpfs_resolvidos_primeira / total_clientes_global) * 100
+
+# 2. Canais por CPF (Média de esforço)
+media_canais_cpf = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
+
+# 3. Transbordo Crítico (Canal que mais recebe clientes frustrados de outros canais)
+df_transbordos = df_jornadas_completas[df_jornadas_completas['Jornada_Realizada'].str.contains("➔")]
+transbordo_critico = "Nenhum"
+if not df_transbordos.empty:
+    # Pega o último canal da jornada das pessoas que transbordaram
+    df_transbordos['Canal_Final'] = df_transbordos['Jornada_Realizada'].apply(lambda x: x.split(" ➔ ")[-1])
+    transbordo_critico = df_transbordos['Canal_Final'].mode()[0]
+
+# --- EXIBIÇÃO DOS KPIS (Layout idêntico à imagem) ---
+st.markdown("<br>", unsafe_allow_html=True)
+col1, col2, col3 = st.columns(3)
+col1.metric("Resolução em 1º Contato (FCR)", f"{fcr_percentual:.1f}%")
+col2.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
+col3.metric("Transbordo Crítico", transbordo_critico)
+st.markdown("<br>", unsafe_allow_html=True)
+
+# --- PREPARAÇÃO DOS DADOS PARA O FLUXO (SANKEY DIAGRAM) ---
+# Vamos mapear os passos: De onde o cliente veio -> Para onde ele foi
+transicoes = []
+jornadas_list = df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
+
+for jornada in jornadas_list:
+    # Se teve mais de um passo, criamos os pares de transição
+    if len(jornada) > 1:
+        for i in range(len(jornada) - 1):
+            origem = jornada[i]
+            destino = jornada[i+1]
+            if origem != destino: # Ignora se o cliente abriu dois tickets seguidos no mesmo canal
+                transicoes.append({'Origem': origem, 'Destino': destino})
+
+df_fluxo = pd.DataFrame(transicoes)
+
+if not df_fluxo.empty:
+    df_fluxo_agrupado = df_fluxo.groupby(['Origem', 'Destino']).size().reset_index(name='Volume')
+    df_fluxo_agrupado = df_fluxo_agrupado[df_fluxo_agrupado['Volume'] >= vol_minimo] # Respeita o filtro lateral!
+
+    if not df_fluxo_agrupado.empty:
+        # Criando índices numéricos para o Plotly Sankey
+        todos_nos = list(pd.concat([df_fluxo_agrupado['Origem'], df_fluxo_agrupado['Destino']]).unique())
+        mapeamento_nos = {nome: i for i, nome in enumerate(todos_nos)}
+        
+        df_fluxo_agrupado['Origem_ID'] = df_fluxo_agrupado['Origem'].map(mapeamento_nos)
+        df_fluxo_agrupado['Destino_ID'] = df_fluxo_agrupado['Destino'].map(mapeamento_nos)
+        
+        # Desenhando o diagrama de fluxo
+        fig_sankey = px.parallel_categories(
+            df_fluxo_agrupado, 
+            dimensions=['Origem', 'Destino'],
+            color="Volume", 
+            color_continuous_scale=px.colors.sequential.Blues,
+            title="Fluxo de Transbordo entre Canais"
+        )
+        fig_sankey.update_layout(font=dict(size=14))
+        st.plotly_chart(fig_sankey, use_container_width=True)
+    else:
+        st.info("Volume de transbordo muito baixo para gerar o diagrama com o filtro atual.")
+else:
+    st.info("Não foram identificados transbordos entre canais diferentes nesta base.")
