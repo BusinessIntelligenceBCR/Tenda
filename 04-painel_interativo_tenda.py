@@ -321,11 +321,13 @@ for jornada in df_ativo.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
 top1_str = "Nenhuma"
 top23_html = ""
 if pares_transbordo:
+    total_transbordos_ocorridos = len(pares_transbordo) # Correção Matemática
     df_pares = pd.Series(pares_transbordo)
     top_3 = df_pares.value_counts().head(3)
     
     for i, (rota_nome, volume) in enumerate(top_3.items(), 1):
-        percentual = (volume / volume_clientes_transbordo) * 100 if volume_clientes_transbordo > 0 else 0
+        # Agora divide pelo total de transbordos reais, garantindo a soma de 100%
+        percentual = (volume / total_transbordos_ocorridos) * 100 if total_transbordos_ocorridos > 0 else 0
         texto_rota = f"{rota_nome} ({percentual:.1f}%)"
         if i == 1:
             top1_str = texto_rota
@@ -337,7 +339,7 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
 col2.metric("Clientes Multicanal", f"{taxa_transbordo:.1f}%", help="Percentual de clientes únicos que foram forçados a usar 2 ou mais canais diferentes.")
 with col3:
-    st.metric("Maior Rota de Atrito", top1_str, help="As 3 maiores rotas de quebra de canal e a proporção de cada uma.")
+    st.metric("Maior Rota de Atrito", top1_str, help="As 3 maiores rotas de quebra de canal e a proporção de cada uma em relação ao total de transbordos.")
     if top23_html:
         # Injeta HTML para colocar o 2º e 3º lugares menores e discretos abaixo da métrica principal
         st.markdown(f"<div style='margin-top:-15px; font-size:13px; color:gray;'>{top23_html}</div>", unsafe_allow_html=True)
@@ -451,9 +453,6 @@ st.markdown("---")
 # ==============================================================================
 # SEÇÃO 6: EVOLUÇÃO HISTÓRICA MÊS A MÊS (ANÁLISE DE CULTURA DIGITAL)
 # ==============================================================================
-# NOTA IMPORTANTE: A Seção 6 utiliza o DataFrame global 'df' (sem o filtro da barra lateral),
-# para garantir que o utilizador consiga ver sempre a evolução completa dos meses independentemente 
-# do mês específico selecionado para inspecionar nas seções acima.
 st.header("6️⃣ Evolução Mensal do Comportamento (Histórico Completo)")
 st.markdown("Monitore a tendência histórica das rotas de transbordo para medir a mudança cultural do cliente ao longo de todos os meses analisados.")
 
