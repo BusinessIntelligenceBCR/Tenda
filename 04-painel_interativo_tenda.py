@@ -300,7 +300,7 @@ if not df_fluxo.empty:
         nos_origem = df_fluxo_agrupado['Origem'].unique()
         nos_destino = df_fluxo_agrupado['Destino'].unique()
         todos_nos_puros = list(set(nos_origem).union(set(nos_destino)))
-        mapeamento_nos = {nome: i for i, enumerate(todos_nos_puros)}
+        mapeamento_nos = {nome: i for i, nome in enumerate(todos_nos_puros)}
         
         df_fluxo_agrupado['Origem_ID'] = df_fluxo_agrupado['Origem'].map(mapeamento_nos)
         df_fluxo_agrupado['Destino_ID'] = df_fluxo_agrupado['Destino'].map(mapeamento_nos)
