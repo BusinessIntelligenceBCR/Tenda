@@ -287,27 +287,39 @@ with st.expander("📖 Como interpretar as proporções desta análise?"):
 # ==============================================================================
 # SEÇÃO 5: VISÃO EXECUTIVA - FLUXO OMNICHANNEL E KPIS
 # ==============================================================================
-import plotly.graph_objects as go # Importação necessária para o gráfico de Sankey
+import plotly.graph_objects as go 
 
 st.header("5️⃣ Mapa de Jornada e KPIs de Retenção")
-st.markdown("Visão executiva do comportamento de transbordo e eficiência do primeiro atendimento (FCR).")
+st.markdown("Visão executiva do comportamento de transbordo entre os canais de atendimento.")
 
-# --- CÁLCULO DE KPIS ---
-cpfs_resolvidos_primeira = df_cpfs[df_cpfs['Ticket ID'] == 1]['CPF_Limpo'].nunique()
-fcr_percentual = (cpfs_resolvidos_primeira / total_clientes_global) * 100 if total_clientes_global > 0 else 0
+# --- CÁLCULO DE KPIS GLOBAIS ---
 media_canais_cpf = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
 
-df_transbordos = df_jornadas_completas[df_jornadas_completas['Jornada_Realizada'].str.contains("➔")]
-transbordo_critico = "Nenhum"
-if not df_transbordos.empty:
-    df_transbordos['Canal_Final'] = df_transbordos['Jornada_Realizada'].apply(lambda x: x.split(" ➔ ")[-1])
-    transbordo_critico = df_transbordos['Canal_Final'].mode()[0]
+# Calcula porcentagem de clientes que precisaram usar mais de 1 canal
+cpfs_multicanal = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique()
+taxa_transbordo = (cpfs_multicanal[cpfs_multicanal > 1].count() / total_clientes_global) * 100 if total_clientes_global > 0 else 0
+
+# Calcula a pior rota de transbordo (A ➔ B)
+pares_transbordo = []
+for jornada in df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
+    j_limpa = []
+    for c in jornada:
+        if not j_limpa or c != j_limpa[-1]:
+            j_limpa.append(c)
+    if len(j_limpa) > 1:
+        for i in range(len(j_limpa) - 1):
+            pares_transbordo.append(f"{j_limpa[i]} ➔ {j_limpa[i+1]}")
+            
+if pares_transbordo:
+    pior_rota = pd.Series(pares_transbordo).mode()[0]
+else:
+    pior_rota = "Nenhuma"
 
 st.markdown("<br>", unsafe_allow_html=True)
 col1, col2, col3 = st.columns(3)
-col1.metric("Resolução em 1º Contato (FCR)", f"{fcr_percentual:.1f}%")
-col2.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
-col3.metric("Transbordo Crítico", transbordo_critico)
+col1.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
+col2.metric("Clientes Multicanal", f"{taxa_transbordo:.1f}%", help="Percentual de clientes que foram forçados a trocar de canal ao menos uma vez.")
+col3.metric("Maior Rota de Atrito", pior_rota, help="A rota de quebra de canal (Origem ➔ Destino) que possui o maior volume de clientes.")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- FILTROS ESPECÍFICOS PARA O FLUXO ---
@@ -323,7 +335,6 @@ with col_filt2:
     filtro_motivo_fluxo = st.selectbox("Filtrar por Motivo:", lista_motivos)
 
 # --- PREPARAÇÃO DOS DADOS (SANKEY) ---
-# Aplica o filtro de Motivo
 df_sec5 = df.copy()
 if filtro_motivo_fluxo != "Todos (Geral)":
     df_sec5 = df_sec5[df_sec5['Motivo_Inicial_Jornada'] == filtro_motivo_fluxo]
@@ -331,26 +342,22 @@ if filtro_motivo_fluxo != "Todos (Geral)":
 transicoes = []
 jornadas_list = df_sec5.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
 
-# Palavras-chave dos canais principais
 canais_principais = ["VOZ", "WHATSAPP", "EMAIL", "E-MAIL"]
 
 for jornada in jornadas_list:
     jornada_limpa = []
     for c in jornada:
-        # Se escolheu ver apenas os principais, transforma os menores em "Outros Canais"
         if filtro_visao_canais.startswith("Apenas"):
             eh_principal = any(principal in str(c).upper() for principal in canais_principais)
             nome_canal = c if eh_principal else "Outros Canais"
         else:
             nome_canal = c
             
-        # Evita transições para o mesmo canal (ex: Voz -> Voz)
         if not jornada_limpa or nome_canal != jornada_limpa[-1]:
             jornada_limpa.append(nome_canal)
             
     if len(jornada_limpa) > 1:
         for i in range(len(jornada_limpa) - 1):
-            # Adiciona o sufixo para o gráfico não misturar o canal de Origem com o de Destino
             transicoes.append({'Origem': f"{jornada_limpa[i]} (Início)", 'Destino': f"{jornada_limpa[i+1]} (Destino)"})
 
 df_fluxo = pd.DataFrame(transicoes)
@@ -361,7 +368,6 @@ if not df_fluxo.empty:
     df_fluxo_agrupado = df_fluxo_agrupado[df_fluxo_agrupado['Volume'] >= vol_minimo]
 
     if not df_fluxo_agrupado.empty:
-        # Cria a lista de todos os "nós" (blocos azuis) do gráfico
         todos_nos = list(pd.concat([df_fluxo_agrupado['Origem'], df_fluxo_agrupado['Destino']]).unique())
         mapeamento_nos = {nome: i for i, nome in enumerate(todos_nos)}
         
@@ -374,13 +380,13 @@ if not df_fluxo.empty:
               thickness = 30,
               line = dict(color = "black", width = 0.5),
               label = todos_nos,
-              color = "#1F618D" # Azul corporativo
+              color = "#1F618D"
             ),
             link = dict(
               source = df_fluxo_agrupado['Origem_ID'],
               target = df_fluxo_agrupado['Destino_ID'],
               value = df_fluxo_agrupado['Volume'],
-              color = "rgba(46, 134, 193, 0.4)" # Azul translúcido para as conexões
+              color = "rgba(46, 134, 193, 0.4)" 
             )
         )])
         
