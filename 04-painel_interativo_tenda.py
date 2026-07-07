@@ -284,29 +284,25 @@ with st.expander("📖 Como interpretar as proporções desta análise?"):
     """)
 
 
-    # ==============================================================================
+# ==============================================================================
 # SEÇÃO 5: VISÃO EXECUTIVA - FLUXO OMNICHANNEL E KPIS
 # ==============================================================================
+import plotly.graph_objects as go # Importação necessária para o gráfico de Sankey
+
 st.header("5️⃣ Mapa de Jornada e KPIs de Retenção")
 st.markdown("Visão executiva do comportamento de transbordo e eficiência do primeiro atendimento (FCR).")
 
 # --- CÁLCULO DE KPIS ---
-# 1. Resolução em 1º Contato (FCR - First Contact Resolution)
 cpfs_resolvidos_primeira = df_cpfs[df_cpfs['Ticket ID'] == 1]['CPF_Limpo'].nunique()
-fcr_percentual = (cpfs_resolvidos_primeira / total_clientes_global) * 100
-
-# 2. Canais por CPF (Média de esforço)
+fcr_percentual = (cpfs_resolvidos_primeira / total_clientes_global) * 100 if total_clientes_global > 0 else 0
 media_canais_cpf = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
 
-# 3. Transbordo Crítico (Canal que mais recebe clientes frustrados de outros canais)
 df_transbordos = df_jornadas_completas[df_jornadas_completas['Jornada_Realizada'].str.contains("➔")]
 transbordo_critico = "Nenhum"
 if not df_transbordos.empty:
-    # Pega o último canal da jornada das pessoas que transbordaram
     df_transbordos['Canal_Final'] = df_transbordos['Jornada_Realizada'].apply(lambda x: x.split(" ➔ ")[-1])
     transbordo_critico = df_transbordos['Canal_Final'].mode()[0]
 
-# --- EXIBIÇÃO DOS KPIS (Layout idêntico à imagem) ---
 st.markdown("<br>", unsafe_allow_html=True)
 col1, col2, col3 = st.columns(3)
 col1.metric("Resolução em 1º Contato (FCR)", f"{fcr_percentual:.1f}%")
@@ -314,45 +310,83 @@ col2.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
 col3.metric("Transbordo Crítico", transbordo_critico)
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- PREPARAÇÃO DOS DADOS PARA O FLUXO (SANKEY DIAGRAM) ---
-# Vamos mapear os passos: De onde o cliente veio -> Para onde ele foi
+# --- FILTROS ESPECÍFICOS PARA O FLUXO ---
+st.markdown("#### 🔍 Filtros do Fluxo de Transbordo")
+col_filt1, col_filt2 = st.columns(2)
+with col_filt1:
+    filtro_visao_canais = st.selectbox(
+        "Foco dos Canais:", 
+        ["Apenas Principais (Voz, Whatsapp, E-mail)", "Ver Todos os Canais"]
+    )
+with col_filt2:
+    lista_motivos = ["Todos (Geral)"] + df['Motivo_Inicial_Jornada'].dropna().unique().tolist()
+    filtro_motivo_fluxo = st.selectbox("Filtrar por Motivo:", lista_motivos)
+
+# --- PREPARAÇÃO DOS DADOS (SANKEY) ---
+# Aplica o filtro de Motivo
+df_sec5 = df.copy()
+if filtro_motivo_fluxo != "Todos (Geral)":
+    df_sec5 = df_sec5[df_sec5['Motivo_Inicial_Jornada'] == filtro_motivo_fluxo]
+
 transicoes = []
-jornadas_list = df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
+jornadas_list = df_sec5.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
+
+# Palavras-chave dos canais principais
+canais_principais = ["VOZ", "WHATSAPP", "EMAIL", "E-MAIL"]
 
 for jornada in jornadas_list:
-    # Se teve mais de um passo, criamos os pares de transição
-    if len(jornada) > 1:
-        for i in range(len(jornada) - 1):
-            origem = jornada[i]
-            destino = jornada[i+1]
-            if origem != destino: # Ignora se o cliente abriu dois tickets seguidos no mesmo canal
-                transicoes.append({'Origem': origem, 'Destino': destino})
+    jornada_limpa = []
+    for c in jornada:
+        # Se escolheu ver apenas os principais, transforma os menores em "Outros Canais"
+        if filtro_visao_canais.startswith("Apenas"):
+            eh_principal = any(principal in str(c).upper() for principal in canais_principais)
+            nome_canal = c if eh_principal else "Outros Canais"
+        else:
+            nome_canal = c
+            
+        # Evita transições para o mesmo canal (ex: Voz -> Voz)
+        if not jornada_limpa or nome_canal != jornada_limpa[-1]:
+            jornada_limpa.append(nome_canal)
+            
+    if len(jornada_limpa) > 1:
+        for i in range(len(jornada_limpa) - 1):
+            # Adiciona o sufixo para o gráfico não misturar o canal de Origem com o de Destino
+            transicoes.append({'Origem': f"{jornada_limpa[i]} (Início)", 'Destino': f"{jornada_limpa[i+1]} (Destino)"})
 
 df_fluxo = pd.DataFrame(transicoes)
 
+# --- DESENHO DO GRÁFICO SANKEY ---
 if not df_fluxo.empty:
     df_fluxo_agrupado = df_fluxo.groupby(['Origem', 'Destino']).size().reset_index(name='Volume')
-    df_fluxo_agrupado = df_fluxo_agrupado[df_fluxo_agrupado['Volume'] >= vol_minimo] # Respeita o filtro lateral!
+    df_fluxo_agrupado = df_fluxo_agrupado[df_fluxo_agrupado['Volume'] >= vol_minimo]
 
     if not df_fluxo_agrupado.empty:
-        # Criando índices numéricos para o Plotly Sankey
+        # Cria a lista de todos os "nós" (blocos azuis) do gráfico
         todos_nos = list(pd.concat([df_fluxo_agrupado['Origem'], df_fluxo_agrupado['Destino']]).unique())
         mapeamento_nos = {nome: i for i, nome in enumerate(todos_nos)}
         
         df_fluxo_agrupado['Origem_ID'] = df_fluxo_agrupado['Origem'].map(mapeamento_nos)
         df_fluxo_agrupado['Destino_ID'] = df_fluxo_agrupado['Destino'].map(mapeamento_nos)
         
-        # Desenhando o diagrama de fluxo
-        fig_sankey = px.parallel_categories(
-            df_fluxo_agrupado, 
-            dimensions=['Origem', 'Destino'],
-            color="Volume", 
-            color_continuous_scale=px.colors.sequential.Blues,
-            title="Fluxo de Transbordo entre Canais"
-        )
-        fig_sankey.update_layout(font=dict(size=14))
-        st.plotly_chart(fig_sankey, use_container_width=True)
+        fig = go.Figure(data=[go.Sankey(
+            node = dict(
+              pad = 20,
+              thickness = 30,
+              line = dict(color = "black", width = 0.5),
+              label = todos_nos,
+              color = "#1F618D" # Azul corporativo
+            ),
+            link = dict(
+              source = df_fluxo_agrupado['Origem_ID'],
+              target = df_fluxo_agrupado['Destino_ID'],
+              value = df_fluxo_agrupado['Volume'],
+              color = "rgba(46, 134, 193, 0.4)" # Azul translúcido para as conexões
+            )
+        )])
+        
+        fig.update_layout(title_text="", font_size=14, height=550)
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Volume de transbordo muito baixo para gerar o diagrama com o filtro atual.")
+        st.warning("Com o volume mínimo configurado na barra lateral, não há dados suficientes para exibir o fluxo.")
 else:
-    st.info("Não foram identificados transbordos entre canais diferentes nesta base.")
+    st.info("Não há transbordos registados para o filtro selecionado.")
