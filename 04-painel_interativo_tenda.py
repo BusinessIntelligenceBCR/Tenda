@@ -318,31 +318,37 @@ for jornada in df_ativo.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
         for i in range(len(j_limpa) - 1):
             pares_transbordo.append(f"{j_limpa[i]} ➔ {j_limpa[i+1]}")
             
-pior_rota = "Nenhuma"
+top3_rotas_str = "Nenhuma"
 if pares_transbordo:
     df_pares = pd.Series(pares_transbordo)
-    pior_rota_nome = df_pares.mode()[0]
-    volume_pior_rota = df_pares.value_counts().iloc[0]
+    top_3 = df_pares.value_counts().head(3)
     
-    percentual_pior_rota = (volume_pior_rota / volume_clientes_transbordo) * 100 if volume_clientes_transbordo > 0 else 0
-    pior_rota = f"{pior_rota_nome} ({percentual_pior_rota:.1f}%)"
+    linhas_top3 = []
+    for i, (rota_nome, volume) in enumerate(top_3.items(), 1):
+        percentual = (volume / volume_clientes_transbordo) * 100 if volume_clientes_transbordo > 0 else 0
+        linhas_top3.append(f"{i}º {rota_nome} ({percentual:.1f}%)")
+        
+    top3_rotas_str = " | ".join(linhas_top3)
 
 st.markdown("<br>", unsafe_allow_html=True)
-col1, col2, col3 = st.columns(3)
+# Coluna 3 foi alargada ([1, 1, 2.5]) para acomodar o texto do Top 3
+col1, col2, col3 = st.columns([1, 1, 2.5])
 col1.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
 col2.metric("Clientes Multicanal", f"{taxa_transbordo:.1f}%", help="Percentual de clientes únicos que foram forçados a usar 2 ou mais canais diferentes.")
-col3.metric("Maior Rota de Atrito", pior_rota, help="Qual a rota de quebra de canal mais comum e quantos % de todos os clientes em transbordo passam por ela.")
+col3.metric("Top 3 Rotas de Atrito", top3_rotas_str, help="As 3 maiores rotas de quebra de canal e a proporção de cada uma em relação ao total de clientes multicanal.")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- FILTROS ESPECÍFICOS PARA O FLUXO ---
 st.markdown("#### 🔍 Filtros do Fluxo de Transbordo")
-col_filt1, col_filt2 = st.columns(2)
+col_filt1, col_filt2, col_filt3 = st.columns(3)
+
+lista_canais_unicos = ["Todos"] + sorted(df_ativo['Canal de Entrada'].dropna().unique().tolist())
+
 with col_filt1:
-    filtro_visao_canais = st.selectbox(
-        "Foco dos Canais:", 
-        ["Apenas Principais (Voz, Whatsapp, E-mail)", "Ver Todos os Canais"]
-    )
+    filtro_canal_inicio = st.selectbox("Filtrar Canal de Origem:", lista_canais_unicos)
 with col_filt2:
+    filtro_canal_destino = st.selectbox("Filtrar Canal de Destino:", lista_canais_unicos)
+with col_filt3:
     lista_motivos = ["Todos (Geral)"] + df_ativo['Motivo_Inicial_Jornada'].dropna().unique().tolist()
     filtro_motivo_fluxo = st.selectbox("Filtrar por Motivo:", lista_motivos)
 
@@ -354,23 +360,23 @@ if filtro_motivo_fluxo != "Todos (Geral)":
 transicoes = []
 jornadas_list = df_sec5.groupby('CPF_Limpo')['Canal de Entrada'].apply(list)
 
-canais_principais = ["VOZ", "WHATSAPP", "EMAIL", "E-MAIL"]
-
 for jornada in jornadas_list:
     jornada_limpa = []
     for c in jornada:
-        if filtro_visao_canais.startswith("Apenas"):
-            eh_principal = any(principal in str(c).upper() for principal in canais_principais)
-            nome_canal = c if eh_principal else "Outros Canais"
-        else:
-            nome_canal = c
-            
-        if not jornada_limpa or nome_canal != jornada_limpa[-1]:
-            jornada_limpa.append(nome_canal)
+        if not jornada_limpa or c != jornada_limpa[-1]:
+            jornada_limpa.append(c)
             
     if len(jornada_limpa) > 1:
         for i in range(len(jornada_limpa) - 1):
-            transicoes.append({'Origem': f"{jornada_limpa[i]} (Início)", 'Destino': f"{jornada_limpa[i+1]} (Destino)"})
+            origem = jornada_limpa[i]
+            destino = jornada_limpa[i+1]
+            
+            # Validação dos novos filtros direcionais
+            passa_origem = (filtro_canal_inicio == "Todos") or (origem == filtro_canal_inicio)
+            passa_destino = (filtro_canal_destino == "Todos") or (destino == filtro_canal_destino)
+            
+            if passa_origem and passa_destino:
+                transicoes.append({'Origem': f"{origem} (Início)", 'Destino': f"{destino} (Destino)"})
 
 df_fluxo = pd.DataFrame(transicoes)
 
