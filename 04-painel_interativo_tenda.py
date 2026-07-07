@@ -12,11 +12,9 @@ st.set_page_config(page_title="Governança Omnichannel - Tenda", layout="wide")
 
 # --- FUNÇÃO NATIVA DE AUTENTICAÇÃO ---
 def verificar_autenticacao():
-    # Inicializa a variável na memória se for o primeiro acesso
     if "autenticado" not in st.session_state:
         st.session_state["autenticado"] = False
 
-    # Se o usuário não estiver autenticado, exibe a tela de login e bloqueia o app
     if not st.session_state["autenticado"]:
         st.title("🔑 Controle de Acesso - BCR CX")
         st.markdown("Insira suas credenciais para acessar o ambiente de Governança Tenda.")
@@ -28,24 +26,22 @@ def verificar_autenticacao():
             botao_login = st.button("Acessar Painel")
             
         if botao_login:
-            # Compara com as credenciais salvas nos Secrets da Nuvem do Streamlit
             if (usuario_digitado == st.secrets["acesso"]["usuario"] and 
                 senha_digitada == st.secrets["acesso"]["senha"]):
                 st.session_state["autenticado"] = True
                 st.success("Acesso autorizado! Carregando dados...")
-                st.rerun() # Recarrega a página já autenticado
+                st.rerun() 
             else:
                 st.error("Usuário ou senha incorretos. Tente novamente.")
         
-        return False # Interrompe a execução do restante do script
-    return True # Libera a execução do painel
+        return False 
+    return True 
 
-# Executa a trava de segurança. Se retornar Falso, o script para aqui.
 if not verificar_autenticacao():
     st.stop()
 
 # ==============================================================================
-# SEÇÃO PRINCIPAL DO DASHBOARD (SÓ EXECUTA SE ARRIVAR COMO AUTENTICADO)
+# SEÇÃO PRINCIPAL DO DASHBOARD
 # ==============================================================================
 st.title("📊 Painel Interativo de Fluxo e Atrito de Atendimento")
 st.markdown("---")
@@ -83,10 +79,17 @@ arquivo_upado = st.sidebar.file_uploader(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Ajuste de Visualização")
-vol_minimo = st.sidebar.slider("Ocultar fluxos com menos de X clientes:", 1, 50, 2)
+st.sidebar.header("⚙️ Filtro de Relevância")
+# CORREÇÃO AQUI: Mudamos de slider para number_input, permitindo filtrar até milhares de clientes se necessário.
+vol_minimo = st.sidebar.number_input(
+    "Ocultar volumes com menos de X clientes:", 
+    min_value=1, 
+    value=5, 
+    step=5,
+    help="Remove os 'ruídos' (exceções e erros operacionais) para focar nas jornadas e motivos que afetam o grande volume."
+)
 
-# --- CARGA DOS DADOS (DEPENDE DO UPLOAD) ---
+# --- CARGA DOS DADOS ---
 @st.cache_data
 def carregar_e_processar_dados(arquivo):
     df = pd.read_parquet(arquivo)
@@ -103,12 +106,10 @@ def carregar_e_processar_dados(arquivo):
     df['Motivo_Inicial_Jornada'] = df['CPF_Limpo'].map(mapa_motivo_inicial)
     return df
 
-# Se nenhum arquivo foi upado, exibe tela de instrução e encerra
 if arquivo_upado is None:
     st.info("👋 Olá! Para iniciar a análise, realize o login e arraste o arquivo **safe_zendesk_tickets.parquet** na área indicada na barra lateral esquerda.")
     st.stop()
 
-# Carrega a base upada da memória
 df = carregar_e_processar_dados(arquivo_upado)
 
 # ==============================================================================
@@ -128,7 +129,8 @@ df_taxa_motivo['% do Total de Clientes'] = (df_taxa_motivo['Volume_Clientes'] / 
 df_taxa_motivo['Taxa de Recontato (%)'] = (df_taxa_motivo['Total_Recontatos'] / df_taxa_motivo['Volume_Clientes'] * 100).round(2)
 df_taxa_motivo['Impacto no Retrabalho (%)'] = (df_taxa_motivo['Total_Recontatos'] / total_recontatos_global * 100).round(2)
 
-df_taxa_motivo = df_taxa_motivo[df_taxa_motivo['Volume_Clientes'] >= 2].sort_values(by='Impacto no Retrabalho (%)', ascending=False)
+# CORREÇÃO AQUI: A tabela agora respeita o vol_minimo inserido na barra lateral!
+df_taxa_motivo = df_taxa_motivo[df_taxa_motivo['Volume_Clientes'] >= vol_minimo].sort_values(by='Impacto no Retrabalho (%)', ascending=False)
 motivos_ordenados_por_impacto = df_taxa_motivo['Motivo_Inicial_Jornada'].tolist()
 
 def construir_string_jornada(canais):
@@ -156,6 +158,8 @@ def desenhar_grafico_jornadas(df_input, titulo_grafico, min_vol, cor_barra="#2E8
         
     df_caminhos = pd.DataFrame({'Jornada (Início ➔ Meio ➔ Fim)': caminhos})
     df_ranking = df_caminhos.groupby('Jornada (Início ➔ Meio ➔ Fim)').size().reset_index(name='Quantidade de Clientes')
+    
+    # CORREÇÃO AQUI: Aplica o volume mínimo de fato nos fluxos
     df_ranking = df_ranking[df_ranking['Quantidade de Clientes'] >= min_vol]
     
     if df_ranking.empty:
@@ -185,7 +189,7 @@ grafico1, tb1 = desenhar_grafico_jornadas(df_sec1, f"Top Caminhos Percorridos - 
 if grafico1:
     st.plotly_chart(grafico1, use_container_width=True)
 else:
-    st.info("Volume insuficiente para exibir os caminhos deste canal.")
+    st.info("Volume insuficiente. Ajuste o Filtro de Relevância na barra lateral para um número menor.")
 
 st.markdown("---")
 
@@ -231,7 +235,7 @@ grafico3, tb3 = desenhar_grafico_jornadas(df_sec3, f"Top Caminhos Percorridos do
 if grafico3:
     st.plotly_chart(grafico3, use_container_width=True)
 else:
-    st.info("Volume insuficiente para mapear a jornada deste motivo.")
+    st.info("Volume insuficiente. Ajuste o Filtro de Relevância na barra lateral para um número menor.")
 
 st.markdown("---")
 
@@ -241,22 +245,34 @@ st.markdown("---")
 st.header("4️⃣ Análise Inversa: Motivos por Fluxo de Jornada")
 st.markdown("Selecione um caminho exato para descobrir quais assuntos empurraram o cliente para essa esteira.")
 
-lista_jornadas_existentes = df_jornadas_completas['Jornada_Realizada'].value_counts().index.tolist()
-jornada_selecionada = st.selectbox("📌 Filtrar por Jornada Específica:", lista_jornadas_existentes, key="sec4")
+# CORREÇÃO AQUI: A lista suspensa só exibe jornadas que respeitam o volume mínimo
+jornadas_filtradas = df_jornadas_completas['Jornada_Realizada'].value_counts()
+jornadas_validas = jornadas_filtradas[jornadas_filtradas >= vol_minimo].index.tolist()
 
-df_sec4 = df_jornadas_completas[df_jornadas_completas['Jornada_Realizada'] == jornada_selecionada]
-total_clientes_jornada = len(df_sec4)
+if not jornadas_validas:
+    st.info("Nenhuma jornada alcançou o volume mínimo definido na barra lateral.")
+else:
+    jornada_selecionada = st.selectbox("📌 Filtrar por Jornada Específica:", jornadas_validas, key="sec4")
 
-df_ranking_jornada = df_sec4.groupby('Motivo_Inicial_Jornada').size().reset_index(name='Quantidade de Clientes')
-df_ranking_jornada = df_ranking_jornada.sort_values(by='Quantidade de Clientes', ascending=False)
+    df_sec4 = df_jornadas_completas[df_jornadas_completas['Jornada_Realizada'] == jornada_selecionada]
+    total_clientes_jornada = len(df_sec4)
 
-df_ranking_jornada['% Dentro desta Jornada'] = (df_ranking_jornada['Quantidade de Clientes'] / total_clientes_jornada * 100).round(2).astype(str) + '%'
-df_ranking_jornada['% do Total da Operação (CPFs)'] = (df_ranking_jornada['Quantidade de Clientes'] / total_clientes_global * 100).round(2).astype(str) + '%'
+    df_ranking_jornada = df_sec4.groupby('Motivo_Inicial_Jornada').size().reset_index(name='Quantidade de Clientes')
+    
+    # CORREÇÃO AQUI: Aplica o volume mínimo nos motivos dentro desta jornada também
+    df_ranking_jornada = df_ranking_jornada[df_ranking_jornada['Quantidade de Clientes'] >= vol_minimo]
+    df_ranking_jornada = df_ranking_jornada.sort_values(by='Quantidade de Clientes', ascending=False)
 
-df_ranking_jornada = df_ranking_jornada.rename(columns={'Motivo_Inicial_Jornada': 'Motivo de Contato Unificado'})
+    if df_ranking_jornada.empty:
+        st.info("Não há motivos individuais suficientes para compor esse fluxo considerando o filtro atual.")
+    else:
+        df_ranking_jornada['% Dentro desta Jornada'] = (df_ranking_jornada['Quantidade de Clientes'] / total_clientes_jornada * 100).round(2).astype(str) + '%'
+        df_ranking_jornada['% do Total da Operação (CPFs)'] = (df_ranking_jornada['Quantidade de Clientes'] / total_clientes_global * 100).round(2).astype(str) + '%'
 
-st.markdown(f"**Volume de clientes (CPFs) que realizaram a jornada `{jornada_selecionada}`:** {total_clientes_jornada}")
-st.dataframe(df_ranking_jornada.head(20), use_container_width=True, hide_index=True)
+        df_ranking_jornada = df_ranking_jornada.rename(columns={'Motivo_Inicial_Jornada': 'Motivo de Contato Unificado'})
+
+        st.markdown(f"**Volume de clientes (CPFs) que realizaram a jornada `{jornada_selecionada}`:** {total_clientes_jornada}")
+        st.dataframe(df_ranking_jornada.head(20), use_container_width=True, hide_index=True)
 
 with st.expander("📖 Como interpretar as proporções desta análise?"):
     st.markdown("""
