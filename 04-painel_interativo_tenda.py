@@ -295,9 +295,11 @@ st.markdown("Visão executiva do comportamento de transbordo entre os canais de 
 # --- CÁLCULO DE KPIS GLOBAIS ---
 media_canais_cpf = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique().mean()
 
-cpfs_multicanal = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique()
-taxa_transbordo = (cpfs_multicanal[cpfs_multicanal > 1].count() / total_clientes_global) * 100 if total_clientes_global > 0 else 0
+cpfs_multicanal_count = df.groupby('CPF_Limpo')['Canal de Entrada'].nunique()
+volume_clientes_transbordo = cpfs_multicanal_count[cpfs_multicanal_count > 1].count()
+taxa_transbordo = (volume_clientes_transbordo / total_clientes_global) * 100 if total_clientes_global > 0 else 0
 
+# Calcula a pior rota de transbordo (A ➔ B) e o seu impacto no problema geral
 pares_transbordo = []
 for jornada in df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
     j_limpa = []
@@ -308,13 +310,21 @@ for jornada in df.groupby('CPF_Limpo')['Canal de Entrada'].apply(list):
         for i in range(len(j_limpa) - 1):
             pares_transbordo.append(f"{j_limpa[i]} ➔ {j_limpa[i+1]}")
             
-pior_rota = pd.Series(pares_transbordo).mode()[0] if pares_transbordo else "Nenhuma"
+pior_rota = "Nenhuma"
+if pares_transbordo:
+    df_pares = pd.Series(pares_transbordo)
+    pior_rota_nome = df_pares.mode()[0]
+    volume_pior_rota = df_pares.value_counts().iloc[0]
+    
+    # Impacto % da Pior Rota sobre todos os clientes multicanal
+    percentual_pior_rota = (volume_pior_rota / volume_clientes_transbordo) * 100 if volume_clientes_transbordo > 0 else 0
+    pior_rota = f"{pior_rota_nome} ({percentual_pior_rota:.1f}%)"
 
 st.markdown("<br>", unsafe_allow_html=True)
 col1, col2, col3 = st.columns(3)
 col1.metric("Canais por CPF (Méd)", f"{media_canais_cpf:.1f}")
-col2.metric("Clientes Multicanal", f"{taxa_transbordo:.1f}%", help="Percentual de clientes que trocaram de canal ao menos uma vez.")
-col3.metric("Maior Rota de Atrito", pior_rota, help="A rota de quebra de canal que possui o maior volume de clientes.")
+col2.metric("Clientes Multicanal", f"{taxa_transbordo:.1f}%", help="Percentual de clientes únicos que foram forçados a usar 2 ou mais canais diferentes.")
+col3.metric("Maior Rota de Atrito", pior_rota, help="Qual a rota de quebra de canal mais comum e quantos % de todos os clientes em transbordo passam por ela.")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- FILTROS ESPECÍFICOS PARA O FLUXO ---
@@ -363,11 +373,9 @@ if not df_fluxo.empty:
     df_fluxo_agrupado = df_fluxo_agrupado[df_fluxo_agrupado['Volume'] >= vol_minimo]
 
     if not df_fluxo_agrupado.empty:
-        # INTEGRAÇÃO MATEMÁTICA: Calcula o total da origem para extrair a proporção percentual
         df_fluxo_agrupado['Total_Da_Origem'] = df_fluxo_agrupado.groupby('Origem')['Volume'].transform('sum')
         df_fluxo_agrupado['Porcentagem_Do_Fluxo'] = (df_fluxo_agrupado['Volume'] / df_fluxo_agrupado['Total_Da_Origem']) * 100
 
-        # Criação dos índices dos nós puros
         nos_origem = df_fluxo_agrupado['Origem'].unique()
         nos_destino = df_fluxo_agrupado['Destino'].unique()
         todos_nos_puros = list(set(nos_origem).union(set(nos_destino)))
@@ -376,7 +384,6 @@ if not df_fluxo.empty:
         df_fluxo_agrupado['Origem_ID'] = df_fluxo_agrupado['Origem'].map(mapeamento_nos)
         df_fluxo_agrupado['Destino_ID'] = df_fluxo_agrupado['Destino'].map(mapeamento_nos)
         
-        # INTEGRAÇÃO VISUAL: Constrói rótulos ricos injetando a volumetria total de cada bloco
         labels_com_valores = [""] * len(todos_nos_puros)
         for nome, idx in mapeamento_nos.items():
             if nome in nos_origem:
@@ -386,7 +393,6 @@ if not df_fluxo.empty:
                 total_bloco = df_fluxo_agrupado[df_fluxo_agrupado['Destino'] == nome]['Volume'].sum()
                 labels_com_valores[idx] = f"<b>{nome}</b><br>Total: {total_bloco} CPFs"
         
-        # Plotagem do Gráfico de Sankey Estruturado
         fig = go.Figure(data=[go.Sankey(
             node = dict(
               pad = 18,
@@ -401,7 +407,6 @@ if not df_fluxo.empty:
               value = df_fluxo_agrupado['Volume'],
               customdata = df_fluxo_agrupado['Porcentagem_Do_Fluxo'],
               color = "rgba(46, 134, 193, 0.35)",
-              # Customização do texto flutuante (Hover) com a porcentagem calculada
               hovertemplate = (
                   "Origem: <b>%{source.label}</b><br>"
                   "Destino: <b>%{target.label}</b><br>"
