@@ -1,4 +1,8 @@
-streamlit
 pandas
+streamlit
 plotly
+requests
+python-dotenv
+openpyxl
+xlsxwriter
 pyarrow
